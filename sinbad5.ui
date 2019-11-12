@@ -16,7 +16,7 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout">
     <item row="0" column="0">
-     <widget class="QGraphicsView" name="dockView"/>
+     <widget class="DockArea" name="area"/>
     </item>
    </layout>
   </widget>
@@ -31,14 +31,18 @@
    </property>
    <widget class="QMenu" name="menuprincipal">
     <property name="title">
-     <string>principal</string>
+     <string>&amp;Fichier</string>
     </property>
     <addaction name="separator"/>
+    <addaction name="actionopen"/>
    </widget>
    <addaction name="menuprincipal"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QDockWidget" name="dockWidgetQt">
+   <property name="features">
+    <set>QDockWidget::DockWidgetFloatable|QDockWidget::DockWidgetMovable</set>
+   </property>
    <attribute name="dockWidgetArea">
     <number>1</number>
    </attribute>
@@ -70,7 +74,22 @@
     </layout>
    </widget>
   </widget>
+  <action name="actionopen">
+   <property name="text">
+    <string>open</string>
+   </property>
+   <property name="toolTip">
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-style:italic;&quot;&gt;ouvrir fichier&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+  </action>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>DockArea</class>
+   <extends>QGraphicsView</extends>
+   <header>pyqtgraph.dockarea</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

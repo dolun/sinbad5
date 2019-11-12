@@ -1,9 +1,11 @@
 
 import sys
+import os
+import glob
 
-from PyQt5.QtGui import *
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
+from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QGridLayout, QFileDialog
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, Qt, QThreadPool  # *
 from PyQt5.uic import loadUi
 
 # from PySide2 import __version__ as PySide2Version
@@ -17,14 +19,29 @@ import pyqtgraph as pg
 # from pyqtgraph.console import ConsoleWidget
 from pyqtgraph.dockarea import Dock, DockArea
 
+import numba as nb
 import numpy as np
 import pylab as pl
+from pylab import (arange, transpose, clip,  # ,scatter,show#,shape,cos,pi,reshape,dot,zeros
+                   argsort, array, c_,  empty, exp, float32, int32,
+                   float64, hstack, int32, linspace, load, log, log10,
+                   logical_and, logspace, meshgrid,  ones_like,
+                   poisson, poly1d, polyfit, r_, rand, randn, ravel, real,
+                   sqrt, subplots, uniform, unique, zeros, zeros_like, loadtxt, where)
 import pandas as pd
 import matplotlib as mpl
+
 import time
 import traceback
 
 from silx.gui.plot import Plot1D as silxPlot1D
+
+sys.path.append(os.path.abspath("./module_swig/"))
+try:
+    import sinbad
+    print('import sinbad ok')
+except:
+    print("Attention: pas de module swig sinbad")
 
 
 class MonGraph(pg.GraphItem):
@@ -45,7 +62,7 @@ class MonGraph(pg.GraphItem):
         else:
             self.setCursor(Qt.ArrowCursor)
 
-        print("mouseMoved", len(pts))
+        # print("mouseMoved", len(pts))
 
     def setData(self, **kwds):
         print("setData", kwds)
@@ -128,7 +145,7 @@ class MonGraph(pg.GraphItem):
         ev.ignore()
 
     def mouseDragEvent(self, ev):
-        print("mouseDragEvent", ev)
+        # print("mouseDragEvent", ev)
         if ev.button() != pg.QtCore.Qt.LeftButton:
             ev.ignore()
             return
@@ -269,17 +286,16 @@ class MainWindow(QMainWindow):
         self.area.addDock(d2, 'bottom')
         # self.area.addDock(d3, 'right')
 
-
         df = pd.read_csv("../spectres/csv/pechblend.csv", header=None)
-        spectre = df[0].tolist()
-        tx = np.arange(len(spectre)+1) # +1 because stepMode=True
-        self.spectre1 = v1.plot(x=tx, y=spectre, pen=pg.mkPen(
+        self.spectre = df[0].tolist()
+        tx = np.arange(len(self.spectre)+1)  # +1 because stepMode=True
+        self.PlotSpectre1 = v1.plot(x=tx, y=self.spectre, pen=pg.mkPen(
             "#EA1515", width=1, style=Qt.SolidLine), name='red plot', stepMode=True)
-        self.spectre2 = v2.plot(x=tx, y=spectre, pen=pg.mkPen(
+        self.PlotSpectre2 = v2.plot(x=tx, y=self.spectre, pen=pg.mkPen(
             "#EA1515", width=1, style=Qt.SolidLine), name='zoom plot', stepMode=True)
 
-        mongraph = MonGraph(v1.scene())
         pos = [(854, 2), (8541, 1.8), (10000, 3)]  # rand(5,2)
+        mongraph = MonGraph(v2.scene())
         mongraph.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
                          pen=pg.mkPen(pg.mkColor("#FFFF00"), width=2))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
         v2.addItem(mongraph)
@@ -287,6 +303,10 @@ class MainWindow(QMainWindow):
         self.regionx = pg.LinearRegionItem()
         v1.addItem(self.regionx, ignoreBounds=True)
         self.regionx.setRegion([2000, 4000])
+
+        self.threadpool = QThreadPool()
+        print("Multithreading with maximum %d threads" %
+              self.threadpool.maxThreadCount())
 
         def updateRegion():
             self.regionx.setZValue(10)
@@ -300,16 +320,17 @@ class MainWindow(QMainWindow):
                                                    '../spectres/csv', "csv files (*.csv *.txt)")
             print(fname)
             df = pd.read_csv(fname, header=None)
-            spectre = df[0].tolist()
-            tx = np.arange(len(spectre)+1)
-            self.spectre1.setData(x=tx, y=spectre)
-            self.spectre2.setData(x=tx, y=spectre)
+            self.spectre = df[0].tolist()
+            tx = np.arange(len(self.spectre)+1)
+            self.PlotSpectre1.setData(x=tx, y=self.spectre)
+            self.PlotSpectre2.setData(x=tx, y=self.spectre)
 
         self.openButton.clicked.connect(openFile)
 
-#############################################################################
-        return
+        self.start_compute_thread()
 
+#############################################################################
+    """
         w = QWidget()
 
         self.setCentralWidget(w)
@@ -317,11 +338,8 @@ class MainWindow(QMainWindow):
         self.counter = 0
 
         layout = QVBoxLayout()
-        self.bar = QProgressBar()
+        self.bar = QProgressBar() 
 
-        self.l = QLabel("Start")
-        b = QPushButton("DANGER!")
-        b.pressed.connect(self.oh_no)
 
         # self.browser = QWebEngineView()
         # self.browser.setUrl(QUrl("http://google.com"))
@@ -358,19 +376,86 @@ class MainWindow(QMainWindow):
         print("Multithreading with maximum %d threads" %
               self.threadpool.maxThreadCount())
 
-        self.timer = QTimer()
-        self.timer.setInterval(1000)
-        self.timer.timeout.connect(self.recurring_timer)
-        self.timer.start()
+        # self.timer = QTimer()
+        # self.timer.setInterval(1000)
+        # self.timer.timeout.connect(self.recurring_timer)
+        # self.timer.start()
+
+        self.start_compute_thread()
+
+    """
 
     def progress_fn(self, n):
-        self.bar.setValue(n)
-        print(f"{n}% done")
+        # self.bar.setValue(n)
+        print(f"# {n}")
 
-    def execute_this_fn(self, progress_callback):
-        for n in range(0, 5):
-            time.sleep(1)
-            progress_callback.emit(n*100/4)
+    def GibbsSampler(self, progress_callback, paramGibbs):
+        # -----------------------------------------
+        sinbad.initRng(-1)  # Never forget that
+
+        print(len(paramGibbs))
+        ofst = paramGibbs['ofst']
+        kevcan = paramGibbs["kevcan"]
+        var1 = paramGibbs["var1"]
+        var0 = paramGibbs["var0"]
+        alpha = paramGibbs["alpha"]
+        m0 = paramGibbs["m0"]
+        h0 = paramGibbs["h0"]
+        excluy = paramGibbs["excluy"]
+        exclux = paramGibbs["exclux"]
+        probaExclu = paramGibbs["probaExclu"]
+        fit = 1  # paramGibbs["fit"]
+        ppolya = paramGibbs["ppolya"]
+        prior_var = paramGibbs["prior_var"]
+        typenoy = paramGibbs["typenoy"]
+        seuilpval = 15.  # paramGibbs["seuilpval"]#20
+        prec = paramGibbs["prec"]  # 0.975
+        typed = paramGibbs["typed"]  # 1
+        ppriorplatvspr = paramGibbs["ppriorplatvspr"]
+        energmin = paramGibbs["emin"]
+        energmax = paramGibbs["emax"]
+
+        # -----------------------------------------
+        # energmin=600.
+        # energmax=900.
+        # ppolya=ones(numcans)
+        print("energmin energmax", energmin, energmax)
+
+        canmin = int32((energmin-ofst)/kevcan)
+        canmax = int32((energmax-ofst)/kevcan)
+        numcans = canmax-canmin
+        energmin = (canmin-.0)*kevcan+ofst
+        energmax = energmin+numcans*kevcan
+        binobs = r_[0:numcans+1]*kevcan+energmin
+        energquant = .5*(binobs[:-1]+binobs[1:])
+        # pour essai
+        rep = "../fred/21 mars 2016 - 32 spectres 134Cs et 137Cs/"
+        data = np.loadtxt(glob.glob(rep+"*[0-9][0-9].txt")[0])
+        histo = array(data[canmin:canmax], 'f')
+        sinbad.initialisation(
+            binobs.tolist(), histo.astype('l').tolist(), var1, var0)
+
+        @nb.njit(nogil=True, parallel=True)
+        def monte_carlo_pi_serial(nsamples):
+            acc = 0
+            for _ in nb.prange(nsamples):
+                x = pl.rand()
+                y = pl.rand()
+                if (x**2 + y**2) < 1.0:
+                    acc += 1
+            return 4.0 * acc / nsamples
+
+        @nb.jit(nogil=True, parallel=False)
+        def appel_iter(i):
+            ret = array(sinbad.appel_iter(var1, var0, (iter == 0) | (iter == 3), alpha, m0,
+                      h0, excluy, exclux, probaExclu, fit, ppolya, prior_var, typenoy, ppriorplatvspr))
+            return i
+
+        for iter in range(0, 40):
+            # print(appel_iter(iter))
+            monte_carlo_pi_serial(int(4e8))
+            # time.sleep(1)
+            progress_callback.emit(iter)  # *100/4)
 
         return "Done."
 
@@ -380,20 +465,19 @@ class MainWindow(QMainWindow):
     def thread_complete(self):
         print("THREAD COMPLETE!")
 
-    def oh_no(self):
+    def start_compute_thread(self):
         # Pass the function to execute
         # Any other args, kwargs are passed to the run function
-        worker = Worker(self.execute_this_fn)
+        paramGibbs = np.load("dicoFred.npy", allow_pickle=True,
+                             encoding='latin1').tolist()
+        worker = Worker(self.GibbsSampler, paramGibbs=paramGibbs)
+
         worker.signals.result.connect(self.print_output)
         worker.signals.finished.connect(self.thread_complete)
         worker.signals.progress.connect(self.progress_fn)
 
         # Execute
         self.threadpool.start(worker)
-
-    def recurring_timer(self):
-        self.counter += 1
-        self.l.setText("Counter: %d" % self.counter)
 
 
 print(sys.version)
