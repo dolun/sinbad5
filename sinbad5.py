@@ -3,6 +3,7 @@ import sys
 import os
 import glob
 
+
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QGridLayout, QFileDialog
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, Qt, QThreadPool  # *
@@ -31,10 +32,12 @@ from pylab import (arange, transpose, clip,  # ,scatter,show#,shape,cos,pi,resha
 import pandas as pd
 import matplotlib as mpl
 
+import lib_sinbad5
+
 import time
 import traceback
 
-from silx.gui.plot import Plot1D as silxPlot1D
+# from silx.gui.plot import Plot1D as silxPlot1D
 
 sys.path.append(os.path.abspath("./module_swig/"))
 try:
@@ -208,7 +211,9 @@ class WorkerSignals(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(tuple)
     result = pyqtSignal(object)
-    progress = pyqtSignal(int)
+    # progress = pyqtSignal(int)
+    progress = pyqtSignal(float)
+
     # finished = Signal()
     # error = Signal(tuple)
     # result = Signal(object)
@@ -259,21 +264,22 @@ class MainWindow(QMainWindow):
         loadUi(ui_file, self)
         self.show()
 
-        w = QWidget()
+        # w = QWidget()
 
-        self.setCentralWidget(w)
-        self.area = DockArea(w)
-        gridLayout = QGridLayout(w)
-        gridLayout.setObjectName("gridLayout")
-        gridLayout.addWidget(self.area)
-
+        # self.setCentralWidget(w)
+        # self.area = DockArea(w)
+        # gridLayout = QGridLayout(w)
+        # gridLayout.setObjectName("gridLayout")
+        # gridLayout.addWidget(self.area)
+        
+        # self.area comes from ui file
         d1 = Dock("full view", closable=False)
-        v1 = pg.PlotWidget(title="vue 1")
+        v1 = pg.PlotWidget(title="full view")
         v1.setLogMode(x=False, y=True)
         d1.addWidget(v1)
 
         d2 = Dock("zoom", closable=False)
-        v2 = pg.PlotWidget(title="vue 2")
+        v2 = pg.PlotWidget(title="zoom")
         v2.setLogMode(x=False, y=True)
         d2.addWidget(v2)
 
@@ -316,8 +322,10 @@ class MainWindow(QMainWindow):
         self.regionx.sigRegionChanged.connect(updateRegion)
 
         def openFile():
-            fname, _ = QFileDialog.getOpenFileName(self, 'Open file',
-                                                   '../spectres/csv', "csv files (*.csv *.txt)")
+            fname, toto = QFileDialog.getOpenFileName(self, 'Open file',
+                                                      '../spectres/csv', "csv files (*.csv *.txt)")
+            if fname == '': #cancel
+                return
             print(fname)
             df = pd.read_csv(fname, header=None)
             self.spectre = df[0].tolist()
@@ -326,6 +334,7 @@ class MainWindow(QMainWindow):
             self.PlotSpectre2.setData(x=tx, y=self.spectre)
 
         self.openButton.clicked.connect(openFile)
+        self.actionopen.triggered.connect(openFile)
 
         self.start_compute_thread()
 
@@ -387,7 +396,7 @@ class MainWindow(QMainWindow):
 
     def progress_fn(self, n):
         # self.bar.setValue(n)
-        print(f"# {n}")
+        print(n,time.time())
 
     def GibbsSampler(self, progress_callback, paramGibbs):
         # -----------------------------------------
@@ -435,27 +444,30 @@ class MainWindow(QMainWindow):
         sinbad.initialisation(
             binobs.tolist(), histo.astype('l').tolist(), var1, var0)
 
-        @nb.njit(nogil=True, parallel=True)
-        def monte_carlo_pi_serial(nsamples):
-            acc = 0
-            for _ in nb.prange(nsamples):
-                x = pl.rand()
-                y = pl.rand()
-                if (x**2 + y**2) < 1.0:
-                    acc += 1
-            return 4.0 * acc / nsamples
+        # @nb.njit(nogil=True, parallel=True)
+        # def monte_carlo_pi_serial(nsamples):
+        #     acc = 0
+        #     for _ in nb.prange(nsamples):
+        #         x = pl.rand()
+        #         y = pl.rand()
+        #         if (x**2 + y**2) < 1.0:
+        #             acc += 1
+        #     return 4.0 * acc / nsamples
 
-        @nb.jit(nogil=True, parallel=False)
-        def appel_iter(i):
-            ret = array(sinbad.appel_iter(var1, var0, (iter == 0) | (iter == 3), alpha, m0,
-                      h0, excluy, exclux, probaExclu, fit, ppolya, prior_var, typenoy, ppriorplatvspr))
-            return i
+        # @nb.jit(nogil=True, parallel=False)
+        # def appel_iter(i):
+        #     ret = array(sinbad.appel_iter(var1, var0, (iter == 0) | (iter == 3), alpha, m0,
+        #                                   h0, excluy, exclux, probaExclu, fit, ppolya, prior_var, typenoy, ppriorplatvspr))
+        #     return i
 
+        numthreads=self.threadpool.maxThreadCount()
+        print("numthreads",numthreads)
         for iter in range(0, 40):
             # print(appel_iter(iter))
-            monte_carlo_pi_serial(int(4e8))
-            # time.sleep(1)
-            progress_callback.emit(iter)  # *100/4)
+            # ret=monte_carlo_pi_serial(int(8e8))
+            ret=lib_sinbad5.multithread(numthreads=numthreads).mean()
+
+            progress_callback.emit(ret)
 
         return "Done."
 
@@ -484,6 +496,7 @@ print(sys.version)
 # print("QT VERSION:", PySide2Version)
 print("matplotlib VERSION:", mpl.__version__)
 print("pyqtgraph version", pg.__version__)
+print("numba version",nb.__version__)
 app = QApplication(sys.argv)
 window = MainWindow("sinbad5.ui")
 # window = MainWindow2("sinbad5.ui")
