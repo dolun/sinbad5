@@ -3,7 +3,6 @@ import sys
 import os
 import glob
 
-
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QGridLayout, QFileDialog
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, Qt, QThreadPool  # *
@@ -24,7 +23,7 @@ import numba as nb
 import numpy as np
 import pylab as pl
 from pylab import (arange, transpose, clip,  # ,scatter,show#,shape,cos,pi,reshape,dot,zeros
-                   argsort, array, c_,  empty, exp, float32, int32,
+                   argsort, array, c_, r_,  empty, exp, float32, int32,
                    float64, hstack, int32, linspace, load, log, log10,
                    logical_and, logspace, meshgrid,  ones_like,
                    poisson, poly1d, polyfit, r_, rand, randn, ravel, real,
@@ -37,14 +36,36 @@ import lib_sinbad5
 import time
 import traceback
 
-# from silx.gui.plot import Plot1D as silxPlot1D
-
 sys.path.append(os.path.abspath("./module_swig/"))
 try:
-    import sinbad
-    print('import sinbad ok')
+    import sinbad as lib_sinbad_cpp
+    lib_sinbad_cpp.initRng(-1)  # Never forget that
+    print("import module sinbad OK")
 except:
     print("Attention: pas de module swig sinbad")
+
+# lg=200000
+# tx=arange(lg)
+# data=pl.poisson(np.sin(tx*.001)*5+20)
+# prior_polya=ones_like(data)
+# t0=time.time()
+# for _ in range(100):
+#     ret=lib_sinbad5.polya_parallel(data,1,log(3),prior_polya,1.)
+# print("numba:",time.time()-t0)
+
+# t0=time.time()
+# for _ in range(100):
+#     ret_cpp=lib_sinbad_cpp.polya_parallel(data.tolist(),1,log(3),prior_polya.tolist(),1.)
+# print("c++:",time.time()-t0)
+
+# pl.step(tx,data,"b",lw=.5)
+# pl.step(tx,ret*sum(data),"r")
+# pl.step(tx,array(ret_cpp)*sum(data),"g")
+# print(sum(ret))
+# pl.show()
+# exit()
+
+# from silx.gui.plot import Plot1D as silxPlot1D
 
 
 class MonGraph(pg.GraphItem):
@@ -212,7 +233,7 @@ class WorkerSignals(QObject):
     error = pyqtSignal(tuple)
     result = pyqtSignal(object)
     # progress = pyqtSignal(int)
-    progress = pyqtSignal(float)
+    progress = pyqtSignal(int,object)
 
     # finished = Signal()
     # error = Signal(tuple)
@@ -256,6 +277,9 @@ class Worker(QRunnable):
             self.signals.finished.emit()  # Done
 
 
+STOP, START, PAUSE = 0, 1, 2
+
+
 class MainWindow(QMainWindow):
     """ MainWindow """
 
@@ -271,7 +295,7 @@ class MainWindow(QMainWindow):
         # gridLayout = QGridLayout(w)
         # gridLayout.setObjectName("gridLayout")
         # gridLayout.addWidget(self.area)
-        
+
         # self.area comes from ui file
         d1 = Dock("full view", closable=False)
         v1 = pg.PlotWidget(title="full view")
@@ -293,7 +317,7 @@ class MainWindow(QMainWindow):
         # self.area.addDock(d3, 'right')
 
         df = pd.read_csv("../spectres/csv/pechblend.csv", header=None)
-        self.spectre = df[0].tolist()
+        self.spectre = array(df[0].tolist())
         tx = np.arange(len(self.spectre)+1)  # +1 because stepMode=True
         self.PlotSpectre1 = v1.plot(x=tx, y=self.spectre, pen=pg.mkPen(
             "#EA1515", width=1, style=Qt.SolidLine), name='red plot', stepMode=True)
@@ -303,28 +327,42 @@ class MainWindow(QMainWindow):
         pos = [(854, 2), (8541, 1.8), (10000, 3)]  # rand(5,2)
         mongraph = MonGraph(v2.scene())
         mongraph.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
-                         pen=pg.mkPen(pg.mkColor("#FFFF00"), width=2))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
+                         pen=pg.mkPen(pg.mkColor(QColor(Qt.yellow)), width=1))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
         v2.addItem(mongraph)
 
         self.regionx = pg.LinearRegionItem()
         v1.addItem(self.regionx, ignoreBounds=True)
-        self.regionx.setRegion([2000, 4000])
 
-        self.threadpool = QThreadPool()
-        print("Multithreading with maximum %d threads" %
-              self.threadpool.maxThreadCount())
-
-        def updateRegion():
+        def updatePlot():
             self.regionx.setZValue(10)
             minX, maxX = self.regionx.getRegion()
             v2.setXRange(minX, maxX, padding=0)
 
-        self.regionx.sigRegionChanged.connect(updateRegion)
+        self.regionx.sigRegionChanged.connect(updatePlot)
+
+        def updateRegion():
+            self.regionx.setRegion(v2.getViewBox().viewRange()[0])
+
+        v2.sigXRangeChanged.connect(updateRegion)
+        self.regionx.setRegion([2000, 4000])
+
+        # plot background
+        xmin, xmax = v2.getViewBox().viewRange()[0]
+        t_middle = .5*(tx[:-1]+tx[1:])
+        test = logical_and(t_middle > xmin, t_middle < xmax)
+        ext_test = r_[test, [False]]
+        ext_test = np.logical_or(ext_test, np.roll(ext_test, 1))
+        self.bins_computation = tx[ext_test]
+        self.data_computation = self.spectre[test]
+        self.PlotBackground = v2.plot(x=self.bins_computation, y=self.data_computation,
+                                      pen=pg.mkPen(pg.mkColor(
+                                          QColor(Qt.blue)), width=2, style=Qt.SolidLine),
+                                      name='background', stepMode=True)
 
         def openFile():
-            fname, toto = QFileDialog.getOpenFileName(self, 'Open file',
-                                                      '../spectres/csv', "csv files (*.csv *.txt)")
-            if fname == '': #cancel
+            fname, _ = QFileDialog.getOpenFileName(self, 'Open file',
+                                                   '../spectres/csv', "csv files (*.csv *.txt)")
+            if fname == '':  # cancel
                 return
             print(fname)
             df = pd.read_csv(fname, header=None)
@@ -336,71 +374,41 @@ class MainWindow(QMainWindow):
         self.openButton.clicked.connect(openFile)
         self.actionopen.triggered.connect(openFile)
 
-        self.start_compute_thread()
-
-#############################################################################
-    """
-        w = QWidget()
-
-        self.setCentralWidget(w)
-
-        self.counter = 0
-
-        layout = QVBoxLayout()
-        self.bar = QProgressBar() 
-
-
-        # self.browser = QWebEngineView()
-        # self.browser.setUrl(QUrl("http://google.com"))
-        self.area = DockArea(w)
-
-        d1 = Dock("vp", closable=False)
-        d2 = Dock("vz", closable=False)
-        v1 = pg.PlotWidget(title="vue 1")
-        d1.addWidget(v1)
-        v2 = pg.PlotWidget(title="vue 2")
-        d2.addWidget(v2)
-        self.area.addDock(d1, 'left')
-        self.area.addDock(d2, 'right')
-        mongraph = MonGraph(v1.scene())
-        pos = [(0, 1), (.5, 0), (.75, 0.8), (1, 1)]  # rand(5,2)
-        mongraph.setData(pos=np.array(pos), brush=QColor("#FF0050"),  # , text="du text"
-                         pen=pg.mkPen(pg.mkColor("#FFFF00"), width=2))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
-        v1.addItem(mongraph)
-
-        layout.addWidget(self.l)
-        layout.addWidget(b)
-        layout.addWidget(self.bar)
-        # layout.addWidget(self.browser)
-        layout.addWidget(self.area)
-        w.setLayout(layout)
-        # QFileDialog.getOpenFileName(self,'Open file')
-        # gridLayout = QGridLayout()
-        # gridLayout.setObjectName("gridLayout")
-        # gridLayout.addWidget(self.area)
-
-        self.show()
-
+        # self.start_compute_thread()
+        # compute thread
         self.threadpool = QThreadPool()
         print("Multithreading with maximum %d threads" %
               self.threadpool.maxThreadCount())
+        self.state_computation = STOP
+        self.pushButtonStartPause.clicked.connect(self.StartPauseCompute)
+        self.pushButtonStop.clicked.connect(self.StopCompute)
 
-        # self.timer = QTimer()
-        # self.timer.setInterval(1000)
-        # self.timer.timeout.connect(self.recurring_timer)
-        # self.timer.start()
+    def StopCompute(self):
+        # -> STOP
+        self.state_computation = STOP
+        self.pushButtonStartPause.setChecked(False)
 
-        self.start_compute_thread()
+    def StartPauseCompute(self):
+        if self.state_computation == START:  # -> PAUSE
+            self.state_computation = PAUSE
 
-    """
+        elif self.state_computation == STOP:  # -> START + new computation
+            self.start_compute_thread()
+            self.state_computation = START
 
-    def progress_fn(self, n):
+        elif self.state_computation == PAUSE:  # -> START
+            self.state_computation = START
+
+        else:
+            pass
+
+    def progress_fn(self, n_iterations, background):
         # self.bar.setValue(n)
-        print(n,time.time())
+        self.PlotBackground.setData(self.bins_computation, background)
+        print(n_iterations, time.time())
 
     def GibbsSampler(self, progress_callback, paramGibbs):
         # -----------------------------------------
-        sinbad.initRng(-1)  # Never forget that
 
         print(len(paramGibbs))
         ofst = paramGibbs['ofst']
@@ -441,18 +449,8 @@ class MainWindow(QMainWindow):
         rep = "../fred/21 mars 2016 - 32 spectres 134Cs et 137Cs/"
         data = np.loadtxt(glob.glob(rep+"*[0-9][0-9].txt")[0])
         histo = array(data[canmin:canmax], 'f')
-        sinbad.initialisation(
-            binobs.tolist(), histo.astype('l').tolist(), var1, var0)
-
-        # @nb.njit(nogil=True, parallel=True)
-        # def monte_carlo_pi_serial(nsamples):
-        #     acc = 0
-        #     for _ in nb.prange(nsamples):
-        #         x = pl.rand()
-        #         y = pl.rand()
-        #         if (x**2 + y**2) < 1.0:
-        #             acc += 1
-        #     return 4.0 * acc / nsamples
+        # lib_sinbad_cpp.initialisation(
+        #     binobs.tolist(), histo.astype('l').tolist(), var1, var0)
 
         # @nb.jit(nogil=True, parallel=False)
         # def appel_iter(i):
@@ -460,22 +458,37 @@ class MainWindow(QMainWindow):
         #                                   h0, excluy, exclux, probaExclu, fit, ppolya, prior_var, typenoy, ppriorplatvspr))
         #     return i
 
-        numthreads=self.threadpool.maxThreadCount()
-        print("numthreads",numthreads)
-        for iter in range(0, 40):
-            # print(appel_iter(iter))
-            # ret=monte_carlo_pi_serial(int(8e8))
-            ret=lib_sinbad5.multithread(numthreads=numthreads).mean()
+        numthreads = self.threadpool.maxThreadCount()
+        print("numthreads", numthreads)
+        data = array(self.data_computation, dtype=int)
+        prior_polya = ones_like(data)
 
-            progress_callback.emit(ret)
+        while True:
+            ni = 0
+            t0 = time.time()
+            while time.time()-t0 < .5:
+                if self.state_computation == STOP:
+                    break
+                while self.state_computation == PAUSE:
+                    time.sleep(.25)
+                ret = lib_sinbad5.polya_parallel(data, 1, log(3),
+                                                 prior_polya, 1.)
+                
+                # ret = array(lib_sinbad_cpp.polya_parallel(data.tolist(), 1, log(3),
+                #                                   prior_polya.tolist(), 1.))
+                ni += 1
+            ret *= sum(data)    
+            progress_callback.emit(ni, ret)
+            if self.state_computation == STOP:
+                break
 
         return "Done."
 
     def print_output(self, s):
-        print("resultat:", s)
+        print("final result:", s)
 
     def thread_complete(self):
-        print("THREAD COMPLETE!")
+        print("END COMPUTATION")
 
     def start_compute_thread(self):
         # Pass the function to execute
@@ -496,7 +509,7 @@ print(sys.version)
 # print("QT VERSION:", PySide2Version)
 print("matplotlib VERSION:", mpl.__version__)
 print("pyqtgraph version", pg.__version__)
-print("numba version",nb.__version__)
+print("numba version", nb.__version__)
 app = QApplication(sys.argv)
 window = MainWindow("sinbad5.ui")
 # window = MainWindow2("sinbad5.ui")
