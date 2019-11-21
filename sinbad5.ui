@@ -34,7 +34,7 @@
      <string>&amp;Fichier</string>
     </property>
     <addaction name="separator"/>
-    <addaction name="actionopen"/>
+    <addaction name="actionOpen"/>
    </widget>
    <addaction name="menuprincipal"/>
   </widget>
@@ -49,19 +49,63 @@
    <widget class="QWidget" name="dockWidgetContents">
     <layout class="QVBoxLayout" name="verticalLayout">
      <item>
-      <widget class="QPushButton" name="openButton">
+      <widget class="QLabel" name="label">
        <property name="text">
-        <string>Open File</string>
+        <string>param 1</string>
        </property>
       </widget>
      </item>
      <item>
-      <widget class="QDial" name="dial"/>
+      <widget class="QDial" name="dialPolyaM">
+       <property name="minimum">
+        <number>15</number>
+       </property>
+       <property name="maximum">
+        <number>60</number>
+       </property>
+       <property name="pageStep">
+        <number>1</number>
+       </property>
+       <property name="value">
+        <number>30</number>
+       </property>
+       <property name="wrapping">
+        <bool>false</bool>
+       </property>
+       <property name="notchTarget">
+        <double>5.000000000000000</double>
+       </property>
+       <property name="notchesVisible">
+        <bool>true</bool>
+       </property>
+      </widget>
      </item>
      <item>
-      <widget class="Line" name="line">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
+      <widget class="QLabel" name="label_2">
+       <property name="text">
+        <string>param 2</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QDial" name="dialPolyaH">
+       <property name="minimum">
+        <number>4</number>
+       </property>
+       <property name="maximum">
+        <number>15</number>
+       </property>
+       <property name="pageStep">
+        <number>1</number>
+       </property>
+       <property name="value">
+        <number>8</number>
+       </property>
+       <property name="notchTarget">
+        <double>1.000000000000000</double>
+       </property>
+       <property name="notchesVisible">
+        <bool>true</bool>
        </property>
       </widget>
      </item>
@@ -78,32 +122,166 @@
        </property>
       </spacer>
      </item>
-     <item>
-      <widget class="QPushButton" name="pushButtonStartPause">
-       <property name="text">
-        <string>Start/Pause</string>
-       </property>
-       <property name="checkable">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="pushButtonStop">
-       <property name="text">
-        <string>Stop</string>
-       </property>
-      </widget>
-     </item>
     </layout>
    </widget>
   </widget>
-  <action name="actionopen">
+  <widget class="QToolBar" name="toolBar">
+   <property name="windowTitle">
+    <string>toolBar</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionOpen"/>
+   <addaction name="actionAutoRangeY"/>
+   <addaction name="actionStartPause"/>
+   <addaction name="actionStop"/>
+  </widget>
+  <action name="actionOpen">
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/ouvrir-2.png</normaloff>icones/ouvrir-2.png</iconset>
+   </property>
    <property name="text">
     <string>open</string>
    </property>
    <property name="toolTip">
     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-style:italic;&quot;&gt;ouvrir fichier&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+  </action>
+  <action name="actionStartPause">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/run.png</normaloff>icones/run.png</iconset>
+   </property>
+   <property name="text">
+    <string>Run</string>
+   </property>
+   <property name="toolTip">
+    <string>Run/Pause</string>
+   </property>
+  </action>
+  <action name="actionStop">
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/stop.ico</normaloff>icones/stop.ico</iconset>
+   </property>
+   <property name="text">
+    <string>stop</string>
+   </property>
+  </action>
+  <action name="actionAutoRangeY">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/autoScale.png</normaloff>icones/autoScale.png</iconset>
+   </property>
+   <property name="text">
+    <string>Echelle automatique en Y</string>
+   </property>
+   <property name="iconText">
+    <string>Echelle automatique en Y</string>
+   </property>
+   <property name="toolTip">
+    <string>Range automatique en Y</string>
+   </property>
+  </action>
+  <action name="actionLara">
+   <property name="checkable">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/Lara.png</normaloff>icones/Lara.png</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Lara</string>
+   </property>
+   <property name="iconText">
+    <string>Lara</string>
+   </property>
+   <property name="shortcut">
+    <string/>
+   </property>
+  </action>
+  <action name="actionEchelleLog">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/echellelog.png</normaloff>icones/echellelog.png</iconset>
+   </property>
+   <property name="text">
+    <string>Echelle logarithmique</string>
+   </property>
+   <property name="iconText">
+    <string>Echelle logarithmique</string>
+   </property>
+  </action>
+  <action name="actionGrille">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/grille.png</normaloff>icones/grille.png</iconset>
+   </property>
+   <property name="text">
+    <string>Grille</string>
+   </property>
+   <property name="iconText">
+    <string>Grille</string>
+   </property>
+  </action>
+  <action name="actionCouleurGraph">
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/changeCouleur.png</normaloff>icones/changeCouleur.png</iconset>
+   </property>
+   <property name="text">
+    <string>Couleur du spectre</string>
+   </property>
+   <property name="iconText">
+    <string>Couleur du spectre</string>
+   </property>
+  </action>
+  <action name="fileSaveAction">
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/filesave.png</normaloff>icones/filesave.png</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Sauver</string>
+   </property>
+   <property name="iconText">
+    <string>Sauver</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+S</string>
+   </property>
+  </action>
+  <action name="fileSaveAsAction">
+   <property name="icon">
+    <iconset>
+     <normaloff>icones/filesaveas.png</normaloff>icones/filesaveas.png</iconset>
+   </property>
+   <property name="text">
+    <string>S&amp;auver Sous...</string>
+   </property>
+   <property name="iconText">
+    <string>Sauver sous</string>
+   </property>
+   <property name="shortcut">
+    <string/>
    </property>
   </action>
  </widget>

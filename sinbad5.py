@@ -3,7 +3,7 @@ import sys
 import os
 import glob
 
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QGridLayout, QFileDialog
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, Qt, QThreadPool  # *
 from PyQt5.uic import loadUi
@@ -226,14 +226,14 @@ class WorkerSignals(QObject):
         `object` data returned from processing, anything
 
     progress
-        `int` indicating % progress 
+        `int` indicating % progress
 
     '''
     finished = pyqtSignal()
     error = pyqtSignal(tuple)
     result = pyqtSignal(object)
     # progress = pyqtSignal(int)
-    progress = pyqtSignal(int,object)
+    progress = pyqtSignal(int, object)
 
     # finished = Signal()
     # error = Signal(tuple)
@@ -302,10 +302,31 @@ class MainWindow(QMainWindow):
         v1.setLogMode(x=False, y=True)
         d1.addWidget(v1)
 
+        v1.setMouseEnabled(x=False, y=False)  # désactive interactivité axe X
+        v1.showGrid(x=True, y=True)
+        v1.setBackgroundBrush(QBrush(QColor("#FBFFEB")))
+        # propriétés CSS à utiliser pour le label
+        labelStyle = {'color': '#00EEBB', 'font-size': '12pt'}
+        v1.getAxis('bottom').setLabel(
+            'energy', units='kev', **labelStyle)  # label de l'axe
+        v1.getAxis('left').setLabel('I.', units='cps',
+                                    **labelStyle)  # label de l'axe
+
         d2 = Dock("zoom", closable=False)
-        v2 = pg.PlotWidget(title="zoom")
-        v2.setLogMode(x=False, y=True)
-        d2.addWidget(v2)
+        self.zoom_widget = pg.PlotWidget(title="zoom")
+        vz = self.zoom_widget
+        viewBoxz = vz.getPlotItem().getViewBox()
+        vz.setLogMode(x=False, y=True)
+        vz.setMouseEnabled(x=True, y=True)  # désactive interactivité axe X
+        vz.showGrid(x=True, y=True)
+        vz.setBackgroundBrush(QBrush(QColor(Qt.black)))
+        d2.addWidget(self.zoom_widget)
+
+        d3 = Dock("results", closable=False)
+        self.results_widget = pg.TableWidget()
+        d3.setMaximumWidth(200)
+        d3.addWidget(self.results_widget)
+        d3.setTitle("-results-")
 
         # d3 = Dock("silx", closable=False)
         # plotsilx = silxPlot1D()  # Create the plot widget
@@ -314,21 +335,27 @@ class MainWindow(QMainWindow):
 
         self.area.addDock(d1)
         self.area.addDock(d2, 'bottom')
-        # self.area.addDock(d3, 'right')
+        self.area.addDock(d3, 'right')
 
-        df = pd.read_csv("../spectres/csv/pechblend.csv", header=None)
-        self.spectre = array(df[0].tolist())
-        tx = np.arange(len(self.spectre)+1)  # +1 because stepMode=True
-        self.PlotSpectre1 = v1.plot(x=tx, y=self.spectre, pen=pg.mkPen(
+        def openFile():
+            fname, _ = QFileDialog.getOpenFileName(
+                self, 'Open file', '../spectres/csv', "csv files (*.csv *.txt)")
+            if fname != '':
+                set_new_data(fname)
+
+        def set_new_data(file_data):
+            print(file_data)
+            df = pd.read_csv(file_data, header=None)
+            self.spectre = array(df[0].tolist())
+            self.bins_spectre = np.arange(len(self.spectre)+1)
+            self.PlotSpectre1.setData(x=self.bins_spectre, y=self.spectre)
+            self.PlotSpectre2.setData(x=self.bins_spectre, y=self.spectre)
+
+        self.PlotSpectre1 = v1.plot(x=[0, 1], y=[1], pen=pg.mkPen(
             "#EA1515", width=1, style=Qt.SolidLine), name='red plot', stepMode=True)
-        self.PlotSpectre2 = v2.plot(x=tx, y=self.spectre, pen=pg.mkPen(
+        self.PlotSpectre2 = self.zoom_widget.plot(x=[0, 1], y=[1], pen=pg.mkPen(
             "#EA1515", width=1, style=Qt.SolidLine), name='zoom plot', stepMode=True)
-
-        pos = [(854, 2), (8541, 1.8), (10000, 3)]  # rand(5,2)
-        mongraph = MonGraph(v2.scene())
-        mongraph.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
-                         pen=pg.mkPen(pg.mkColor(QColor(Qt.yellow)), width=1))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
-        v2.addItem(mongraph)
+        set_new_data("./pechblend.csv")
 
         self.regionx = pg.LinearRegionItem()
         v1.addItem(self.regionx, ignoreBounds=True)
@@ -336,63 +363,76 @@ class MainWindow(QMainWindow):
         def updatePlot():
             self.regionx.setZValue(10)
             minX, maxX = self.regionx.getRegion()
-            v2.setXRange(minX, maxX, padding=0)
+            vz.setXRange(minX, maxX, padding=0)
 
         self.regionx.sigRegionChanged.connect(updatePlot)
 
         def updateRegion():
-            self.regionx.setRegion(v2.getViewBox().viewRange()[0])
+            self.regionx.setRegion(
+                vz.getViewBox().viewRange()[0])
+            stateVBZ=viewBoxz.getState()
+            _,isAutoRangeY=stateVBZ["autoRange"]
+            self.actionAutoRangeY.setChecked(isAutoRangeY)
 
-        v2.sigXRangeChanged.connect(updateRegion)
+        vz.sigXRangeChanged.connect(updateRegion)
         self.regionx.setRegion([2000, 4000])
 
+        #  manual_polya_prior_plot
+        self.manual_polya_prior_plot = MonGraph(self.zoom_widget.scene())
+        vz.addItem(self.manual_polya_prior_plot)
         # plot background
-        xmin, xmax = v2.getViewBox().viewRange()[0]
-        t_middle = .5*(tx[:-1]+tx[1:])
-        test = logical_and(t_middle > xmin, t_middle < xmax)
-        ext_test = r_[test, [False]]
-        ext_test = np.logical_or(ext_test, np.roll(ext_test, 1))
-        self.bins_computation = tx[ext_test]
-        self.data_computation = self.spectre[test]
-        self.PlotBackground = v2.plot(x=self.bins_computation, y=self.data_computation,
+        self.set_data_computation()
+        self.PlotBackground = vz.plot(x=self.bins_computation, y=self.data_computation,
                                       pen=pg.mkPen(pg.mkColor(
                                           QColor(Qt.blue)), width=2, style=Qt.SolidLine),
                                       name='background', stepMode=True)
 
-        def openFile():
-            fname, _ = QFileDialog.getOpenFileName(self, 'Open file',
-                                                   '../spectres/csv', "csv files (*.csv *.txt)")
-            if fname == '':  # cancel
-                return
-            print(fname)
-            df = pd.read_csv(fname, header=None)
-            self.spectre = df[0].tolist()
-            tx = np.arange(len(self.spectre)+1)
-            self.PlotSpectre1.setData(x=tx, y=self.spectre)
-            self.PlotSpectre2.setData(x=tx, y=self.spectre)
+        # actions
+        vz.enableAutoRange(axis="y")
+        vz.setAutoVisible(y=True)
+        self.actionOpen.triggered.connect(openFile)
 
-        self.openButton.clicked.connect(openFile)
-        self.actionopen.triggered.connect(openFile)
+        def setAutoRangeY(val):
+            if val:
+                vz.enableAutoRange(axis="y")
+            vz.setAutoVisible(y=val)
 
+        self.actionAutoRangeY.triggered.connect(setAutoRangeY)
+        # print(vz.getPlotItem().getViewBox().getState())
         # self.start_compute_thread()
         # compute thread
         self.threadpool = QThreadPool()
         print("Multithreading with maximum %d threads" %
               self.threadpool.maxThreadCount())
         self.state_computation = STOP
-        self.pushButtonStartPause.clicked.connect(self.StartPauseCompute)
-        self.pushButtonStop.clicked.connect(self.StopCompute)
+        self.actionStartPause.triggered.connect(self.StartPauseCompute)
+        self.actionStop.triggered.connect(self.StopCompute)
+
+    def set_data_computation(self):
+        xmin, xmax = self.zoom_widget.getViewBox().viewRange()[0]
+        t_middle = .5*(self.bins_spectre[:-1]+self.bins_spectre[1:])
+        test = logical_and(t_middle > xmin, t_middle < xmax)
+        ext_test = r_[test, [False]]
+        ext_test = np.logical_or(ext_test, np.roll(ext_test, 1))
+        tx, ty = self.bins_spectre[
+            ext_test], self.spectre[test]
+        self.bins_computation, self.data_computation = tx, ty
+        pos = [(tx[0], log10(ty[0])),  (tx[-1], log10(ty[-1]))]
+        print(pos)
+        self.manual_polya_prior_plot.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
+                                             pen=pg.mkPen(pg.mkColor(QColor(Qt.yellow)), width=1))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
 
     def StopCompute(self):
         # -> STOP
         self.state_computation = STOP
-        self.pushButtonStartPause.setChecked(False)
+        self.actionStartPause.setChecked(False)
 
     def StartPauseCompute(self):
         if self.state_computation == START:  # -> PAUSE
             self.state_computation = PAUSE
 
         elif self.state_computation == STOP:  # -> START + new computation
+            self.set_data_computation()
             self.start_compute_thread()
             self.state_computation = START
 
@@ -446,9 +486,10 @@ class MainWindow(QMainWindow):
         binobs = r_[0:numcans+1]*kevcan+energmin
         energquant = .5*(binobs[:-1]+binobs[1:])
         # pour essai
-        rep = "../fred/21 mars 2016 - 32 spectres 134Cs et 137Cs/"
-        data = np.loadtxt(glob.glob(rep+"*[0-9][0-9].txt")[0])
-        histo = array(data[canmin:canmax], 'f')
+        # rep = "../fred/21 mars 2016 - 32 spectres 134Cs et 137Cs/"
+        # data = np.loadtxt(glob.glob(rep+"*[0-9][0-9].txt")[0])
+        # data=np.loadtxt("./pechblend.csv")
+        # histo = array(data[canmin:canmax], 'f')
         # lib_sinbad_cpp.initialisation(
         #     binobs.tolist(), histo.astype('l').tolist(), var1, var0)
 
@@ -460,24 +501,30 @@ class MainWindow(QMainWindow):
 
         numthreads = self.threadpool.maxThreadCount()
         print("numthreads", numthreads)
-        data = array(self.data_computation, dtype=int)
+        data = array(self.data_computation, dtype=np.int64)
+        numcans=len(data)
         prior_polya = ones_like(data)
-
+        n_per_call=100
         while True:
             ni = 0
             t0 = time.time()
             while time.time()-t0 < .5:
                 if self.state_computation == STOP:
                     break
+                h_polya=self.dialPolyaH.value()
+                m_polya=self.dialPolyaM.value()
+                h_polya/=15.
+                m_polya=exp((m_polya-np.log2(numcans))*h_polya)
+
+                ret = lib_sinbad5.iterations(n_per_call,data, m_polya, h_polya,
+                                             prior_polya, 1.)
                 while self.state_computation == PAUSE:
-                    time.sleep(.25)
-                ret = lib_sinbad5.polya_parallel(data, 1, log(3),
-                                                 prior_polya, 1.)
-                
+                    time.sleep(.2)
+
                 # ret = array(lib_sinbad_cpp.polya_parallel(data.tolist(), 1, log(3),
                 #                                   prior_polya.tolist(), 1.))
-                ni += 1
-            ret *= sum(data)    
+                ni += n_per_call
+            ret *= sum(data)
             progress_callback.emit(ni, ret)
             if self.state_computation == STOP:
                 break
