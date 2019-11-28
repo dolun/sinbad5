@@ -24,7 +24,7 @@ import numpy as np
 import pylab as pl
 from pylab import (arange, transpose, clip,  # ,scatter,show#,shape,cos,pi,reshape,dot,zeros
                    argsort, array, c_, r_,  empty, exp, float32, int32,
-                   float64, hstack, int32, linspace, load, log, log10,
+                   float64, hstack, vstack, linspace, load, log, log10,
                    logical_and, logspace, meshgrid,  ones_like,
                    poisson, poly1d, polyfit, r_, rand, randn, ravel, real,
                    sqrt, subplots, uniform, unique, zeros, zeros_like, loadtxt, where)
@@ -35,6 +35,21 @@ import lib_sinbad5
 
 import time
 import traceback
+
+# @nb.njit(nb.int32[:](nb.int32[:]),parallel=True)
+# def trynb(ret):
+#     n=len(ret)
+#     for _ in nb.prange(1000000):
+#         p=rand(n)
+#         p/=np.sum(p)
+#         ret+=pl.multinomial(1000,p)
+#     return ret
+
+# t=zeros(1000,dtype=int32)
+# retour=trynb(t)
+# print(sum(retour))
+# exit()
+########
 
 sys.path.append(os.path.abspath("./module_swig/"))
 try:
@@ -324,7 +339,7 @@ class MainWindow(QMainWindow):
         d2.addWidget(self.zoom_widget)
 
         d3 = Dock("results", closable=False)
-        self.results_widget = pg.TableWidget()
+        self.results_widget = pg.DataTreeWidget()
         d3.setMaximumWidth(200)
         d3.addWidget(self.results_widget)
         d3.setTitle("-results-")
@@ -348,14 +363,15 @@ class MainWindow(QMainWindow):
             print(file_data)
             df = pd.read_csv(file_data, header=None)
             self.spectre = array(df[0].tolist())
-            self.bins_spectre = np.arange(len(self.spectre)+1)
+            self.bins_spectre = np.arange(len(self.spectre)+1)*.25763
             self.PlotSpectre1.setData(x=self.bins_spectre, y=self.spectre)
             self.PlotSpectre2.setData(x=self.bins_spectre, y=self.spectre)
 
+        spectrumColor = Qt.green
         self.PlotSpectre1 = v1.plot(x=[0, 1], y=[1], pen=pg.mkPen(
-            "#EA1515", width=1, style=Qt.SolidLine), name='red plot', stepMode=True)
+            pg.mkColor(QColor(spectrumColor)), width=1, style=Qt.SolidLine), name='red plot', stepMode=True)
         self.PlotSpectre2 = self.zoom_widget.plot(x=[0, 1], y=[1], pen=pg.mkPen(
-            "#EA1515", width=1, style=Qt.SolidLine), name='zoom plot', stepMode=True)
+            pg.mkColor(QColor(spectrumColor)), width=1, style=Qt.SolidLine), name='zoom plot', stepMode=True)
         set_new_data("./pechblend.csv")
 
         self.regionx = pg.LinearRegionItem()
@@ -376,7 +392,7 @@ class MainWindow(QMainWindow):
             self.actionAutoRangeY.setChecked(isAutoRangeY)
 
         vz.sigXRangeChanged.connect(updateRegion)
-        self.regionx.setRegion([2000, 4000])
+        self.regionx.setRegion([200, 800])
 
         #  manual_polya_prior_plot
         self.manual_polya_prior_plot = MonGraph(self.zoom_widget.scene())
@@ -387,6 +403,13 @@ class MainWindow(QMainWindow):
                                       pen=pg.mkPen(pg.mkColor(
                                           QColor(Qt.blue)), width=2, style=Qt.SolidLine),
                                       name='background', stepMode=True)
+
+        # plot pics
+        print("self.PlotBackground.pos", self.PlotBackground.y())
+
+        self.PlotPics = pg.GraphItem()
+        vz.addItem(self.PlotPics)
+        # self.PlotPics.setData(**getDataForPlotPics((300, 400., 600), (5, 6, 4.5)))
 
         # actions
         vz.enableAutoRange(axis="y")
@@ -443,50 +466,87 @@ class MainWindow(QMainWindow):
         else:
             pass
 
-    def progress_fn(self, n_iterations, background):
+    def getDataForPlotPics(self, p_energies, p_intensities, ref):
+        assert len(p_energies) == len(p_intensities), 'pb getDataForPlotPics'
+        nb_pics = len(p_energies)
+        y0 = np.interp(
+            p_energies, self.bins_computation[:-1], ref)
+        pos = hstack((array([p_energies, log10(p_intensities+y0)]),
+                      array([p_energies, log10(y0)]))).T
+        adj = c_[arange(nb_pics), arange(nb_pics)+nb_pics]
+        symbols = np.repeat(["o", "o"], nb_pics).T
+        size = np.repeat([6, 0], nb_pics).T
+        symbolPen = pg.mkPen(pg.mkColor(QColor(Qt.red)))
+        symbolBrush = QColor('#FFA500')
+        return dict(pos=pos, adj=adj, symbol=symbols, symbolPen=symbolPen, size=size,
+                    symbolBrush=symbolBrush, pen=pg.mkPen(pg.mkColor(QColor(Qt.red))))
+
+    def progress_fn(self, n_iterations, dataDico):
         # self.bar.setValue(n)
-        self.PlotBackground.setData(self.bins_computation, background)
+        sumSpectrum = dataDico["N"]
+        background = sumSpectrum*dataDico["fond"]
+        self.PlotBackground.setData(
+            self.bins_computation, background)
+        self.PlotPics.setData(**self.getDataForPlotPics(dataDico["pics_energies"],
+                                                        sumSpectrum *
+                                                        dataDico["pics_weights"],
+                                                        background))
         print(n_iterations, time.time())
 
     def GibbsSampler(self, progress_callback, paramGibbs):
         # -----------------------------------------
-        # parameter
-        offve = 0.
-        vareng = 1.
+        # parameters
+        offset_energy_canal = self.bins_computation[0]
+        coef_energy_canal = self.bins_computation[1]-self.bins_computation[0]
+        print("kevcan", coef_energy_canal)
+
+        offset_variance_energy = 0.063555
+        coef_variance_energy = 0.00037314
 
         numthreads = self.threadpool.maxThreadCount()
         print("numthreads", numthreads)
         data = array(self.data_computation, dtype=np.int64)
         numcans = len(data)
-        n_per_call = 100
+        n_per_call = 10
         tab_energ_bins = .5 * \
             (self.bins_computation[:-1]+self.bins_computation[1:])
 
-        compton = array(data, dtype=pl.float64)
+        compton = np.empty_like(data, dtype=pl.float64)
         # INITIALISATION
         MAX_NUMBER_OF_PICS = 1000
         pics_weights = zeros(MAX_NUMBER_OF_PICS, dtype=pl.float64)
         pics_energies = empty(MAX_NUMBER_OF_PICS, dtype=pl.float64)
-        pics_sigma = empty(MAX_NUMBER_OF_PICS, dtype=pl.float64)
-        proportionPicsFond = .95
+        pics_variances = empty(MAX_NUMBER_OF_PICS, dtype=pl.float64)
 
-        def initialisationComputation(p_weights, p_energies, p_sigma):
-            print("Initialisation Computation")
+        def initialisationComputation(p_weights, p_energies, p_variances, backgroung,
+                                      _a_polya, _p_polya,
+                                      prior_polya_in):
             e = tab_energ_bins[0]
             id_pic = 0
             while e < tab_energ_bins[-1]:
-                sig = sqrt(vareng * e + offve)
+                variance = coef_variance_energy * e + offset_variance_energy
                 p_energies[id_pic] = e
-                p_sigma[id_pic] = sig
-                e += 5*sig
+                p_variances[id_pic] = variance
+                e += 5*sqrt(variance)
                 p_weights[id_pic] = 1.
                 id_pic += 1
-            p_weights /= sum(p_weights)
+            p_weights[:id_pic] /= sum(p_weights[:id_pic])
+            backgroung[:] = lib_sinbad5.polya_parallel(data,
+                                                       exp(_p_polya * (8 -
+                                                                       np.floor(np.log2(numcans)))), _p_polya,
+                                                       prior_polya_in, 1.)
 
-        initialisationComputation(pics_weights, pics_energies, pics_sigma)
+            # pics/compton proportions
+            prop_pics_background = .01
+            backgroung *= 1-prop_pics_background
+            p_weights[:id_pic] *= prop_pics_background
+
+            print(f"Initialisation Computation: {id_pic} pics")
+            return prop_pics_background, id_pic
+
 
 ####### COMPUTATION LOOP #####################
-
+        initialisation_request = True
         while True:
             ni = 0
             #### read param ####
@@ -499,29 +559,48 @@ class MainWindow(QMainWindow):
             x_polya_prior, y_polya_prior = array(
                 self.manual_polya_prior_plot.pos).T
 
+            alpha_dirichlet = 1.
+
             y_polya_prior = 10**array(y_polya_prior)  # log scale
             ind_sort = np.argsort(x_polya_prior)
             prior_polya = np.interp(
                 tab_energ_bins, x_polya_prior[ind_sort], y_polya_prior[ind_sort])
             # mean(prior_polya) must be 1.
             prior_polya *= numcans/sum(prior_polya)
+            if initialisation_request:
+                initialisation_request = False
+                proportionPicsFond, nb_pics = initialisationComputation(
+                    pics_weights, pics_energies, pics_variances, compton, m_polya, h_polya, prior_polya)
+                # print(pics_weights[:nb_pics])
+                # print(pics_energies[:nb_pics])
+                # print(sqrt(pics_variances[:nb_pics])*2.35)
+
 # Computation for a half second
             t0 = time.time()
             while time.time()-t0 < .5:
                 if self.state_computation == STOP:
                     break
-                ret = lib_sinbad5.iterations(n_per_call, data, proportionPicsFond,
-                                              compton, pics_weights, pics_energies, pics_sigma,
-                                              m_polya, h_polya, prior_polya, 1.)
-                proportionPicsFond = ret
+                ret = lib_sinbad5.iterations(
+                    n_per_call, data, nb_pics, proportionPicsFond,
+                    compton, pics_weights, pics_energies, pics_variances,
+                    m_polya, h_polya, prior_polya, 1.,
+                    offset_energy_canal, coef_energy_canal, offset_variance_energy, coef_variance_energy,
+                    alpha_dirichlet)
+                proportionPicsFond, nb_pics, nb_pics_aff = ret
+                nb_pics = np.int64(nb_pics)
+                nb_pics_aff = np.int64(nb_pics_aff)
+                # print("nb_pics",nb_pics)
+                # return "break 0"
                 while self.state_computation == PAUSE:
                     time.sleep(.2)
 
                 ni += n_per_call
-
+            print('nb_pics', nb_pics,nb_pics_aff)
             if self.state_computation == STOP:
-                return
-            progress_callback.emit(ni, compton*sum(data))
+                break
+            progress_callback.emit(ni, dict(N=sum(data), fond=compton,
+                                            pics_weights=pics_weights[:nb_pics_aff],
+                                            pics_energies=pics_energies[:nb_pics_aff]))
 
         return "Done."
 
@@ -534,9 +613,9 @@ class MainWindow(QMainWindow):
     def start_compute_thread(self):
         # Pass the function to execute
         # Any other args, kwargs are passed to the run function
-        paramGibbs = np.load("dicoFred.npy", allow_pickle=True,
-                             encoding='latin1').tolist()
-        worker = Worker(self.GibbsSampler, paramGibbs=paramGibbs)
+        # paramGibbs = np.load("dicoFred.npy", allow_pickle=True,
+        #                      encoding='latin1').tolist()
+        worker = Worker(self.GibbsSampler, paramGibbs=None)
 
         worker.signals.result.connect(self.print_output)
         worker.signals.finished.connect(self.thread_complete)

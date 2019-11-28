@@ -16,6 +16,7 @@ import threading
 
 NBSIGMA = 6
 M_SQRT1_2 = 1/sqrt(2)
+MAX_PICS = 1000
 
 
 @njit(['float64[:](float64[:],int64)',
@@ -134,35 +135,134 @@ def polya_parallel(data, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
     return tab_out
 
 
-@njit(nb.float64(nb.int64, nb.int64[:],nb.float64, nb.float64[:],
-                    nb.float64[:], nb.float64[:], nb.float64[:], nb.float64,
-                    nb.float64, nb.float64[:], nb.float64),
-      parallel=False, cache=True)
-def iterations(n_per_call, data, proportionPicsFond,
-compton, pics_weights, pics_energies, pics_sigma, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
-    for _ in range(n_per_call):
-        compton[:] = polya_parallel(data, _a_polya, _p_polya,
-                             prior_polya_in, prop_prior_in)
-    return proportionPicsFond
+@njit
+def get_var_from_energ(_e, _offset_variance_energy, _coef_variance_energy):
+    return _offset_variance_energy+_e*_coef_variance_energy
+
+
+@njit(nb.int64[:](nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:],
+                  nb.float64, nb.float64, nb.float64, nb.float64, nb.float64,
+                  nb.float64[:], nb.float64[:], nb.float64[:]))
+def param_update(tab_s1, tab_sx, tab_sx2, tab_sigma, offset, c1, alpha_dirichlet, emin, emax,
+                 pics_weights, pics_locations, pics_variances):
+    """
+    # sufficient statistics s1,sx,sx2
+
+    # compute pics weights,locations and variances
+    # return number of pics
+    """
+    id_pic = 0
+    for s1, sx, sx2, sigma in zip(tab_s1, tab_sx, tab_sx2, tab_sigma):
+        if s1 > 0:
+            w1 = gamma(s1)
+            pics_weights[id_pic] = w1  # weight
+            location = sx/s1+randn()*sigma/sqrt(s1)
+            pics_locations[id_pic] = location  # location
+            pics_variances[id_pic] = get_var_from_energ(
+                location, offset, c1)  # variance
+            id_pic += 1
+    nb_pics_aff = id_pic
+    # weights normalisation + residu
+    w1 = gamma(alpha_dirichlet)
+    inv_sum_weights = 1./(pics_weights[:id_pic].sum()+w1)
+    pics_weights[:id_pic] *= inv_sum_weights
+    residu = w1*inv_sum_weights
+
+    len_residu = int(10.*alpha_dirichlet)
+    for i in range(len_residu):
+        v = pl.beta(1, alpha_dirichlet) if i < len_residu-1 else 1.
+        pics_weights[id_pic] = v*residu
+        residu *= 1.-v
+        location = pl.uniform(emin, emax)
+        pics_locations[id_pic] = location  # location
+        pics_variances[id_pic] = get_var_from_energ(
+            location, offset, c1)  # variance
+        id_pic += 1
+
+    return array((id_pic, nb_pics_aff))
+
+
+@njit(nb.float64[:](nb.float64, nb.float64, nb.int64[:],
+                    nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:]),
+      nogil=True, parallel=True)
+def draw_labels(kevcan, offset, spectre,
+                weights_pics, location_pics, std_pics, weights_background):
+    # stats must be zeros
+    l_pics = len(weights_pics)
+    nbcanaux = len(spectre)
+    proba_pics = empty((nbcanaux, l_pics+1), dtype=float64)
+    id_pics = empty((nbcanaux, l_pics), dtype=np.int64)
+    n_pics = zeros(nbcanaux, dtype=np.int64)
+    inv_kevcan = 1./kevcan
+    for ipic in range(l_pics):
+        dk = location_pics[ipic]
+        std_pic = std_pics[ipic]
+        i_g = int(floor((dk-NBSIGMA*std_pic-offset)*inv_kevcan))
+        i_d = int(ceil((dk+NBSIGMA*std_pic-offset)*inv_kevcan))
+        if i_g < 0:
+            i_g = 0
+        if i_d > nbcanaux:
+            i_d = nbcanaux
+        if i_g >= i_d:
+            continue
+
+        ds = M_SQRT1_2/std_pic
+        energ = offset+kevcan*i_g-dk
+        cvd = math.erf(energ*ds)
+        pds = .5*weights_pics[ipic]
+        for i in arange(i_g, i_d):
+            energ += kevcan
+            nextcvd = math.erf(energ*ds)
+            n = n_pics[i]
+            proba_pics[i][n] = (nextcvd-cvd)*pds
+            id_pics[i][n] = ipic
+            n_pics[i] += 1
+            cvd = nextcvd
+
+    stats = zeros(3*l_pics+nbcanaux, dtype=np.float64)
+
+    for i in range(nbcanaux):
+        n = n_pics[i]
+        if n > 0:
+            proba_pics[i][n] = weights_background[i]  # background
+            prob = proba_pics[i][:n+1]
+            prob /= np.sum(prob)
+            ret = multinomial(spectre[i], prob)
+            bi0 = offset+kevcan*i
+            bi1 = bi0+kevcan
+            enmean = .5*(bi0+bi1)
+            # envar = (bi0*bi0+bi0*bi1+bi1*bi1)/3.
+            for k in range(n):  # pics
+                if ret[k] > 0:
+                    indpic = id_pics[i][k]
+                    n_float = float(ret[k])
+                    # sufficient statistics
+                    stats[indpic] += n_float  # X**0
+                    stats[indpic+l_pics] += n_float*enmean  # X**1
+                    # stats[indpic+2*l_pics] += n_float*envar  # X**2
+            stats[3*l_pics+i] = float(ret[n])  # background
+
+        else:  # all for background if no pic candidat
+            stats[3*l_pics+i] = float(spectre[i])
+
+    return stats
 
 
 @njit(nb.void(nb.float64, nb.float64, nb.int64[:], nb.int64, nb.int64,
               nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:], nb.float64[:]),
       nogil=True, parallel=False)
-def allocbin(kevcan, offset, spectre, istart, istop,
-             weights_pics, location_pics, std_pics, weights_background, stats):
+def allocbin_thread(kevcan, offset, spectre, istart, istop,
+                    weights_pics, location_pics, std_pics, weights_background, stats):
     # stats must be zeros
-
     l_pics = len(weights_pics)
     nbcanaux = istop-istart
     proba_pics = empty((nbcanaux, l_pics+1), dtype=float64)
     id_pics = empty((nbcanaux, l_pics+1), dtype=int32)
     n_pics = zeros(nbcanaux, dtype=int32)
-    inv_kevcan = kevcan
+    inv_kevcan = 1./kevcan
     for ipic in range(l_pics):
         dk = location_pics[ipic]
         std_pic = std_pics[ipic]
-        ds = M_SQRT1_2/std_pic
         i_g = int(floor((dk-NBSIGMA*std_pic-offset)*inv_kevcan))
         i_d = int(ceil((dk+NBSIGMA*std_pic-offset)*inv_kevcan))
         if i_g < istart:
@@ -172,6 +272,7 @@ def allocbin(kevcan, offset, spectre, istart, istop,
         if i_g >= i_d:
             continue
 
+        ds = M_SQRT1_2/std_pic
         energ = offset+kevcan*i_g-dk
         cvd = math.erf(energ*ds)
         pds = .5*weights_pics[ipic]
@@ -183,6 +284,7 @@ def allocbin(kevcan, offset, spectre, istart, istop,
             proba_pics[i0][n] = (nextcvd-cvd)*pds
             id_pics[i0][n] = ipic
             n_pics[i0] += 1
+            cvd = nextcvd
 
     for i in arange(istart, istop):
         i0 = i-istart
@@ -195,7 +297,7 @@ def allocbin(kevcan, offset, spectre, istart, istop,
             bi0 = offset+kevcan*i
             bi1 = bi0+kevcan
             enmean = .5*(bi0+bi1)
-            envar = (bi0*bi0+bi0*bi1+bi1*bi1)/3.
+            # envar = (bi0*bi0+bi0*bi1+bi1*bi1)/3.
             for k in range(n):  # pics
                 if ret[k] > 0:
                     indpic = id_pics[i0][k]
@@ -203,23 +305,24 @@ def allocbin(kevcan, offset, spectre, istart, istop,
                     # sufficient statistics
                     stats[indpic] += n_float  # X**0
                     stats[indpic+l_pics] += n_float*enmean  # X**1
-                    stats[indpic+2*l_pics] += n_float*envar  # X**2
-            stats[i+3*l_pics] = ret[n]  # background
+                    # stats[indpic+2*l_pics] += n_float*envar  # X**2
+            stats[3*l_pics+i] = float(ret[n])  # background
 
         else:  # all for background if no pic candidat
             stats[3*l_pics+i] = float(spectre[i])
+    return
 
 
-def allocbin_mt(kevcan, offset, spectre,
+def allocbin_mt(offset_energy_canal, kevcan, spectre,
                 weights_pics, location_pics, std_pics, weights_background, nbthreads):
     l_pics = len(weights_pics)
     l_spectre = len(spectre)
-    statth = zeros((nbthreads, 3*l_pics+l_spectre), dtype=float)
+    statth = zeros((nbthreads, 3*l_pics+l_spectre), dtype=np.float64)
 
-    tab_chunk = array((arange(nbthreads+1)*l_spectre)/nbthreads, dtype=int)
-    threads = [threading.Thread(target=allocbin,
-                                args=(kevcan, offset, spectre,
-                                      tab_chunk[idthread], tab_chunk[idthread+1],
+    tab_chunks = array((arange(nbthreads+1)*l_spectre)/nbthreads, dtype=int)
+    threads = [threading.Thread(target=allocbin_thread,
+                                args=(kevcan, offset_energy_canal, spectre,
+                                      tab_chunks[idthread], tab_chunks[idthread+1],
                                       weights_pics, location_pics, std_pics,
                                       weights_background, statth[idthread]))
                for idthread in range(nbthreads)]
@@ -229,6 +332,65 @@ def allocbin_mt(kevcan, offset, spectre,
         thread.join()
 
     return statth.sum(0)
+
+
+
+# @njit(nb.float64[:](nb.int64, nb.int64[:], nb.int64, nb.float64, nb.float64[:],
+#                     nb.float64[:], nb.float64[:], nb.float64[:], nb.float64,
+#                     nb.float64, nb.float64[:], nb.float64, nb.float64, nb.float64,
+#                      nb.float64, nb.float64, nb.float64),
+#       parallel=False, cache=True)
+def iterations(
+        n_per_call, data, nb_pics, proportionPicsFond,
+        compton, pics_weights, pics_locations, pics_variances,
+        _a_polya, _p_polya, prior_polya_in, prop_prior_in,
+        offset_energy_canal, kevcan, offset_variance_energy, coef_variance_energy,
+        alpha_dirichlet):
+
+    nb_bins = len(data)
+    NUM_THREADS = nb.config.NUMBA_DEFAULT_NUM_THREADS
+    if NUM_THREADS > 8:
+        NUM_THREADS = 8
+
+    for _ in range(n_per_call):
+
+        # draw labels
+        _weights = pics_weights[:nb_pics]
+        _locations = pics_locations[:nb_pics]
+        _sigmas = sqrt(pics_variances[:nb_pics])
+
+        sufficient_stats = array(allocbin_mt(offset_energy_canal, kevcan, data,
+                                             _weights, _locations, _sigmas, compton, NUM_THREADS), dtype=np.float64)
+        # sufficient_stats = draw_labels(kevcan, offset_energy_canal, data,
+        #         _weights, _locations, _sigmas, compton)
+        s1 = sufficient_stats[:nb_pics]  # float64
+        sx = sufficient_stats[nb_pics:nb_pics*2]  # float64
+        sx2 = sufficient_stats[nb_pics*2:nb_pics*3]  # float64
+        stats_background = sufficient_stats[nb_pics*3:]  # float64
+        # s1=zeros_like(_weights)
+        # sx=zeros_like(_weights)
+        # sx2=zeros_like(_weights)
+        # stats_background=data
+
+        # draw pics/compton proportions
+        prior_beta_proportion_pics_compton = 1.
+        proportionPicsFond = pl.beta(s1.sum()+prior_beta_proportion_pics_compton,
+                                     stats_background.sum()+prior_beta_proportion_pics_compton)
+
+        # draw pics parameters
+        emin, emax = offset_energy_canal, offset_energy_canal+kevcan*nb_bins
+        nb_pics, nb_pics_aff = param_update(s1, sx, sx2, _sigmas, offset_variance_energy, coef_variance_energy,
+                                            alpha_dirichlet, emin, emax,
+                                            pics_weights, pics_locations, pics_variances)
+        pics_weights[:nb_pics] *= proportionPicsFond
+
+        # draw compton with PT
+        compton[:] = polya_parallel(stats_background.astype(np.int64), _a_polya, _p_polya,
+                                    prior_polya_in, prop_prior_in)
+        compton[:] *= 1-proportionPicsFond
+
+    _ret = array((proportionPicsFond, nb_pics, nb_pics_aff))
+    return _ret
 
 
 """
