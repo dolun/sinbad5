@@ -39,7 +39,7 @@ def rehistogram_pow_2(tab_in, lg_out):
     return tab_out
 
 
-@njit(nb.float64[:](nb.int64[:], nb.float64, nb.float64, nb.int64[:], nb.float64),
+@njit(nb.float64[:](nb.int64[:], nb.float64, nb.float64, nb.float64[:], nb.float64),
       parallel=True, cache=True)
 def polya_parallel(data, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
     """ Polya Draw
@@ -133,13 +133,17 @@ def polya_parallel(data, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
 
     return tab_out
 
-@njit(nb.float64[:](nb.int64, nb.int64[:], nb.float64, nb.float64, nb.int64[:], nb.float64),
+
+@njit(nb.float64(nb.int64, nb.int64[:],nb.float64, nb.float64[:],
+                    nb.float64[:], nb.float64[:], nb.float64[:], nb.float64,
+                    nb.float64, nb.float64[:], nb.float64),
       parallel=False, cache=True)
-def iterations(n_per_call, data, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
+def iterations(n_per_call, data, proportionPicsFond,
+compton, pics_weights, pics_energies, pics_sigma, _a_polya, _p_polya, prior_polya_in, prop_prior_in):
     for _ in range(n_per_call):
-        ret = polya_parallel(data, _a_polya, _p_polya,
+        compton[:] = polya_parallel(data, _a_polya, _p_polya,
                              prior_polya_in, prop_prior_in)
-    return ret
+    return proportionPicsFond
 
 
 @njit(nb.void(nb.float64, nb.float64, nb.int64[:], nb.int64, nb.int64,

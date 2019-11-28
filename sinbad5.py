@@ -302,7 +302,8 @@ class MainWindow(QMainWindow):
         v1.setLogMode(x=False, y=True)
         d1.addWidget(v1)
 
-        v1.setMouseEnabled(x=False, y=False)  # désactive interactivité axe X
+        # désactive l'interactivité des axes
+        v1.setMouseEnabled(x=False, y=False)
         v1.showGrid(x=True, y=True)
         v1.setBackgroundBrush(QBrush(QColor("#FBFFEB")))
         # propriétés CSS à utiliser pour le label
@@ -370,8 +371,8 @@ class MainWindow(QMainWindow):
         def updateRegion():
             self.regionx.setRegion(
                 vz.getViewBox().viewRange()[0])
-            stateVBZ=viewBoxz.getState()
-            _,isAutoRangeY=stateVBZ["autoRange"]
+            stateVBZ = viewBoxz.getState()
+            _, isAutoRangeY = stateVBZ["autoRange"]
             self.actionAutoRangeY.setChecked(isAutoRangeY)
 
         vz.sigXRangeChanged.connect(updateRegion)
@@ -449,85 +450,78 @@ class MainWindow(QMainWindow):
 
     def GibbsSampler(self, progress_callback, paramGibbs):
         # -----------------------------------------
-
-        print(len(paramGibbs))
-        ofst = paramGibbs['ofst']
-        kevcan = paramGibbs["kevcan"]
-        var1 = paramGibbs["var1"]
-        var0 = paramGibbs["var0"]
-        alpha = paramGibbs["alpha"]
-        m0 = paramGibbs["m0"]
-        h0 = paramGibbs["h0"]
-        excluy = paramGibbs["excluy"]
-        exclux = paramGibbs["exclux"]
-        probaExclu = paramGibbs["probaExclu"]
-        fit = 1  # paramGibbs["fit"]
-        ppolya = paramGibbs["ppolya"]
-        prior_var = paramGibbs["prior_var"]
-        typenoy = paramGibbs["typenoy"]
-        seuilpval = 15.  # paramGibbs["seuilpval"]#20
-        prec = paramGibbs["prec"]  # 0.975
-        typed = paramGibbs["typed"]  # 1
-        ppriorplatvspr = paramGibbs["ppriorplatvspr"]
-        energmin = paramGibbs["emin"]
-        energmax = paramGibbs["emax"]
-
-        # -----------------------------------------
-        # energmin=600.
-        # energmax=900.
-        # ppolya=ones(numcans)
-        print("energmin energmax", energmin, energmax)
-
-        canmin = int32((energmin-ofst)/kevcan)
-        canmax = int32((energmax-ofst)/kevcan)
-        numcans = canmax-canmin
-        energmin = (canmin-.0)*kevcan+ofst
-        energmax = energmin+numcans*kevcan
-        binobs = r_[0:numcans+1]*kevcan+energmin
-        energquant = .5*(binobs[:-1]+binobs[1:])
-        # pour essai
-        # rep = "../fred/21 mars 2016 - 32 spectres 134Cs et 137Cs/"
-        # data = np.loadtxt(glob.glob(rep+"*[0-9][0-9].txt")[0])
-        # data=np.loadtxt("./pechblend.csv")
-        # histo = array(data[canmin:canmax], 'f')
-        # lib_sinbad_cpp.initialisation(
-        #     binobs.tolist(), histo.astype('l').tolist(), var1, var0)
-
-        # @nb.jit(nogil=True, parallel=False)
-        # def appel_iter(i):
-        #     ret = array(sinbad.appel_iter(var1, var0, (iter == 0) | (iter == 3), alpha, m0,
-        #                                   h0, excluy, exclux, probaExclu, fit, ppolya, prior_var, typenoy, ppriorplatvspr))
-        #     return i
+        # parameter
+        offve = 0.
+        vareng = 1.
 
         numthreads = self.threadpool.maxThreadCount()
         print("numthreads", numthreads)
         data = array(self.data_computation, dtype=np.int64)
-        numcans=len(data)
-        prior_polya = ones_like(data)
-        n_per_call=100
+        numcans = len(data)
+        n_per_call = 100
+        tab_energ_bins = .5 * \
+            (self.bins_computation[:-1]+self.bins_computation[1:])
+
+        compton = array(data, dtype=pl.float64)
+        # INITIALISATION
+        MAX_NUMBER_OF_PICS = 1000
+        pics_weights = zeros(MAX_NUMBER_OF_PICS, dtype=pl.float64)
+        pics_energies = empty(MAX_NUMBER_OF_PICS, dtype=pl.float64)
+        pics_sigma = empty(MAX_NUMBER_OF_PICS, dtype=pl.float64)
+        proportionPicsFond = .95
+
+        def initialisationComputation(p_weights, p_energies, p_sigma):
+            print("Initialisation Computation")
+            e = tab_energ_bins[0]
+            id_pic = 0
+            while e < tab_energ_bins[-1]:
+                sig = sqrt(vareng * e + offve)
+                p_energies[id_pic] = e
+                p_sigma[id_pic] = sig
+                e += 5*sig
+                p_weights[id_pic] = 1.
+                id_pic += 1
+            p_weights /= sum(p_weights)
+
+        initialisationComputation(pics_weights, pics_energies, pics_sigma)
+
+####### COMPUTATION LOOP #####################
+
         while True:
             ni = 0
+            #### read param ####
+            # background
+            h_polya = self.dialPolyaH.value()
+            m_polya = self.dialPolyaM.value()
+            h_polya /= 15.
+            m_polya = exp((m_polya-np.log2(numcans))*h_polya)
+
+            x_polya_prior, y_polya_prior = array(
+                self.manual_polya_prior_plot.pos).T
+
+            y_polya_prior = 10**array(y_polya_prior)  # log scale
+            ind_sort = np.argsort(x_polya_prior)
+            prior_polya = np.interp(
+                tab_energ_bins, x_polya_prior[ind_sort], y_polya_prior[ind_sort])
+            # mean(prior_polya) must be 1.
+            prior_polya *= numcans/sum(prior_polya)
+# Computation for a half second
             t0 = time.time()
             while time.time()-t0 < .5:
                 if self.state_computation == STOP:
                     break
-                h_polya=self.dialPolyaH.value()
-                m_polya=self.dialPolyaM.value()
-                h_polya/=15.
-                m_polya=exp((m_polya-np.log2(numcans))*h_polya)
-
-                ret = lib_sinbad5.iterations(n_per_call,data, m_polya, h_polya,
-                                             prior_polya, 1.)
+                ret = lib_sinbad5.iterations(n_per_call, data, proportionPicsFond,
+                                              compton, pics_weights, pics_energies, pics_sigma,
+                                              m_polya, h_polya, prior_polya, 1.)
+                proportionPicsFond = ret
                 while self.state_computation == PAUSE:
                     time.sleep(.2)
 
-                # ret = array(lib_sinbad_cpp.polya_parallel(data.tolist(), 1, log(3),
-                #                                   prior_polya.tolist(), 1.))
                 ni += n_per_call
-            ret *= sum(data)
-            progress_callback.emit(ni, ret)
+
             if self.state_computation == STOP:
-                break
+                return
+            progress_callback.emit(ni, compton*sum(data))
 
         return "Done."
 
