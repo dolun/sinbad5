@@ -1,7 +1,7 @@
 import sys
 import os
 import numba as nb
-from numba import njit, prange
+from numba import njit, prange, threading_layer
 import numpy as np
 import math
 import pylab as pl
@@ -13,10 +13,51 @@ from pylab import (arange, transpose, clip, randint, gamma,  # ,scatter,show#,sh
                    sqrt, subplots, uniform, unique, zeros, zeros_like, loadtxt, where)
 
 import threading
+from time import time, time_ns
 
-NBSIGMA = 6
+NBSIGMA = 4
 M_SQRT1_2 = 1/sqrt(2)
 MAX_PICS = 1000
+
+@njit(nb.int32(nb.int32, nb.float64))
+def binomial_knuth(n, p):
+    k = 0
+    while n > 10:  # /* This parameter is tunable */
+        a = 1 + (n >> 1)
+        b = 1 + n - a
+        X = pl.beta(a, b)
+        if X >= p:
+            n = a - 1
+            p /= X
+        else:
+            k += a
+            n = b - 1
+            p = (p - X) / (1 - X)
+
+    for _ in range(n):
+        if rand() < p:
+            k += 1
+
+    return k
+
+
+@njit(nb.int32[:](nb.int32, nb.float64[:]))
+def multinomial_knuth(N, p):
+    sum_p = 0.
+    sum_n = 0
+    K = len(p)
+    ret = empty(K, dtype=np.int32)
+    norm = p.sum()
+
+    for k in range(K):
+        if p[k] > 0:
+            ret[k] = binomial_knuth(N-sum_n, p[k]/(norm-sum_p))
+        else:
+            ret[k] = 0
+        sum_p += p[k]
+        sum_n += ret[k]
+    return ret
+
 
 
 @njit(['float64[:](float64[:],int64)',
@@ -253,6 +294,11 @@ def draw_labels(kevcan, offset, spectre,
       nogil=True, parallel=False)
 def allocbin_thread(kevcan, offset, spectre, istart, istop,
                     weights_pics, location_pics, std_pics, weights_background, stats):
+
+    # l_pics0 = len(weights_pics)
+    # _weights_pics = ones(250)
+    # _location_pics = linspace(offset+10., offset+kevcan*len(spectre)-10., 250)
+    # _std_pics = ones(250)
     # stats must be zeros
     l_pics = len(weights_pics)
     nbcanaux = istop-istart
@@ -260,6 +306,7 @@ def allocbin_thread(kevcan, offset, spectre, istart, istop,
     id_pics = empty((nbcanaux, l_pics+1), dtype=int32)
     n_pics = zeros(nbcanaux, dtype=int32)
     inv_kevcan = 1./kevcan
+
     for ipic in range(l_pics):
         dk = location_pics[ipic]
         std_pic = std_pics[ipic]
@@ -293,11 +340,12 @@ def allocbin_thread(kevcan, offset, spectre, istart, istop,
             proba_pics[i0][n] = weights_background[i]  # background
             prob = proba_pics[i0][:n+1]
             prob /= np.sum(prob)
-            ret = multinomial(spectre[i], prob)
+            ret = multinomial_knuth(spectre[i], prob)
             bi0 = offset+kevcan*i
             bi1 = bi0+kevcan
             enmean = .5*(bi0+bi1)
             # envar = (bi0*bi0+bi0*bi1+bi1*bi1)/3.
+            
             for k in range(n):  # pics
                 if ret[k] > 0:
                     indpic = id_pics[i0][k]
@@ -307,7 +355,6 @@ def allocbin_thread(kevcan, offset, spectre, istart, istop,
                     stats[indpic+l_pics] += n_float*enmean  # X**1
                     # stats[indpic+2*l_pics] += n_float*envar  # X**2
             stats[3*l_pics+i] = float(ret[n])  # background
-
         else:  # all for background if no pic candidat
             stats[3*l_pics+i] = float(spectre[i])
     return
@@ -334,7 +381,6 @@ def allocbin_mt(offset_energy_canal, kevcan, spectre,
     return statth.sum(0)
 
 
-
 # @njit(nb.float64[:](nb.int64, nb.int64[:], nb.int64, nb.float64, nb.float64[:],
 #                     nb.float64[:], nb.float64[:], nb.float64[:], nb.float64,
 #                     nb.float64, nb.float64[:], nb.float64, nb.float64, nb.float64,
@@ -351,7 +397,7 @@ def iterations(
     NUM_THREADS = nb.config.NUMBA_DEFAULT_NUM_THREADS
     if NUM_THREADS > 8:
         NUM_THREADS = 8
-
+    t1 = t2 = t3 = 0.
     for _ in range(n_per_call):
 
         # draw labels
@@ -359,8 +405,11 @@ def iterations(
         _locations = pics_locations[:nb_pics]
         _sigmas = sqrt(pics_variances[:nb_pics])
 
+        lt = time_ns()
         sufficient_stats = array(allocbin_mt(offset_energy_canal, kevcan, data,
                                              _weights, _locations, _sigmas, compton, NUM_THREADS), dtype=np.float64)
+        now = time_ns()
+        t1 += now-lt
         # sufficient_stats = draw_labels(kevcan, offset_energy_canal, data,
         #         _weights, _locations, _sigmas, compton)
         s1 = sufficient_stats[:nb_pics]  # float64
@@ -379,16 +428,21 @@ def iterations(
 
         # draw pics parameters
         emin, emax = offset_energy_canal, offset_energy_canal+kevcan*nb_bins
+        lt = time_ns()
         nb_pics, nb_pics_aff = param_update(s1, sx, sx2, _sigmas, offset_variance_energy, coef_variance_energy,
                                             alpha_dirichlet, emin, emax,
                                             pics_weights, pics_locations, pics_variances)
         pics_weights[:nb_pics] *= proportionPicsFond
+        now = time_ns()
+        t2 += now-lt
 
         # draw compton with PT
         compton[:] = polya_parallel(stats_background.astype(np.int64), _a_polya, _p_polya,
                                     prior_polya_in, prop_prior_in)
-        compton[:] *= 1-proportionPicsFond
+        t3 += time_ns()-now
 
+        compton[:] *= 1-proportionPicsFond
+    print(array((t1, t2, t3))*1e-9)
     _ret = array((proportionPicsFond, nb_pics, nb_pics_aff))
     return _ret
 
@@ -426,3 +480,10 @@ def dumb_mt(numthreads):
 # ret = empty(1)
 # a = arange(4, dtype=float)
 # dumb(0, 10, a, ret)
+
+
+
+# draw_labels.parallel_diagnostics(level=4)
+# nb.config.THREADING_LAYER = 'threadsafe'
+# print(polya_parallel(array([2, 5, 6, 5]), 1., 2., array([1, 1., 1, 1]), 1.))
+# print("Threading layer chosen: %s" % nb.threading_layer())

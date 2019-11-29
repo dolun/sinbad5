@@ -58,7 +58,40 @@ try:
     print("import module sinbad OK")
 except:
     print("Attention: pas de module swig sinbad")
+'''
+t0=time.time()
+ret=array(lib_sinbad_cpp.draw_from_multinomial(
+    10000,100000))
+print(time.time()-t0)
+print(ret.sum())
+print("-------------")
 
+
+@nb.njit(nb.int32[:](nb.int32,nb.int32),nogil=True, parallel=False)
+def ma_multi(s,n):
+    l=100
+    p=np.ones(l)/l
+
+    for _ in range(n):
+        # ret=pl.multinomial(s,p)
+        ret=lib_sinbad5.multinomial_knuth(s,p)
+    return ret
+
+@nb.njit(nb.int32(nb.int32,nb.int32),nogil=True, parallel=False)
+def ma_binom(s,n):
+    ret=0
+    for _ in range(n):
+        # ret+=pl.binomial(s,.5)
+        ret+=lib_sinbad5.binomial_knuth(s,.5)
+    return ret
+
+t0=time.time()
+ret=array(ma_multi(100000,10000))
+print(time.time()-t0)
+print(ret.sum())
+
+exit()
+'''
 # lg=200000
 # tx=arange(lg)
 # data=pl.poisson(np.sin(tx*.001)*5+20)
@@ -507,7 +540,7 @@ class MainWindow(QMainWindow):
         print("numthreads", numthreads)
         data = array(self.data_computation, dtype=np.int64)
         numcans = len(data)
-        n_per_call = 10
+        n_per_call = 50
         tab_energ_bins = .5 * \
             (self.bins_computation[:-1]+self.bins_computation[1:])
 
