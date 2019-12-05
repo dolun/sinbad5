@@ -71,10 +71,10 @@ print("-------------")
 def ma_multi(s,n):
     l=100
     p=np.ones(l)/l
-
+    ret=zeros_like(p,dtype=np.int32)
     for _ in range(n):
         # ret=pl.multinomial(s,p)
-        ret=lib_sinbad5.multinomial_knuth(s,p)
+        ret+=lib_sinbad5.multinomial_knuth(s,p)
     return ret
 
 @nb.njit(nb.int32(nb.int32,nb.int32),nogil=True, parallel=False)
@@ -127,6 +127,8 @@ class MonGraph(pg.GraphItem):
     def mouseMoved(self, evt):
 
         vb = self.getViewBox()
+        if vb is None:
+            return
         mousePoint = vb.mapSceneToView(evt)
         pts = self.scatter.pointsAt(mousePoint)
         if len(pts):
@@ -335,7 +337,7 @@ class MainWindow(QMainWindow):
         super(MainWindow, self).__init__(*args, **kwargs)
         loadUi(ui_file, self)
         self.show()
-
+        self.setWindowTitle("-SINBAD-")
         # w = QWidget()
 
         # self.setCentralWidget(w)
@@ -366,6 +368,7 @@ class MainWindow(QMainWindow):
         vz = self.zoom_widget
         viewBoxz = vz.getPlotItem().getViewBox()
         vz.setLogMode(x=False, y=True)
+        # print("vz.listDataItems()",self.zoom_widget.getAxis('left').logMode)
         vz.setMouseEnabled(x=True, y=True)  # désactive interactivité axe X
         vz.showGrid(x=True, y=True)
         vz.setBackgroundBrush(QBrush(QColor(Qt.black)))
@@ -417,24 +420,28 @@ class MainWindow(QMainWindow):
 
         self.regionx.sigRegionChanged.connect(updatePlot)
 
-        def updateRegion():
+        def updateRegion():  
             self.regionx.setRegion(
                 vz.getViewBox().viewRange()[0])
-            stateVBZ = viewBoxz.getState()
-            _, isAutoRangeY = stateVBZ["autoRange"]
-            self.actionAutoRangeY.setChecked(isAutoRangeY)
+            # stateVBZ = viewBoxz.getState()
+            # _, isAutoRangeY = stateVBZ["autoRange"]
+            # self.actionAutoRangeY.setChecked(isAutoRangeY)
 
         vz.sigXRangeChanged.connect(updateRegion)
         self.regionx.setRegion([200, 800])
 
-        #  manual_polya_prior_plot
-        self.manual_polya_prior_plot = MonGraph(self.zoom_widget.scene())
-        vz.addItem(self.manual_polya_prior_plot)
         # plot background
-        self.set_data_computation()
-        self.PlotBackground = vz.plot(x=self.bins_computation, y=self.data_computation,
+        colorPlotReconstruction = QColor(Qt.red)
+        self.PlotReconstruction = vz.plot(x=self.bins_spectre[:2], y=self.spectre[:1],
+                                          pen=pg.mkPen(pg.mkColor(
+                                              colorPlotReconstruction), width=2,
+            style=Qt.SolidLine),
+            name='background', stepMode=True)
+        self.PlotReconstruction.setOpacity(.01 *
+                                           self.sliderOpacityReconstruction.value())
+        self.PlotBackground = vz.plot(x=self.bins_spectre[:2], y=self.spectre[:1],
                                       pen=pg.mkPen(pg.mkColor(
-                                          QColor(Qt.blue)), width=2, style=Qt.SolidLine),
+                                          QColor(Qt.blue)), width=1, style=Qt.SolidLine),
                                       name='background', stepMode=True)
 
         # plot pics
@@ -443,18 +450,34 @@ class MainWindow(QMainWindow):
         self.PlotPics = pg.GraphItem()
         vz.addItem(self.PlotPics)
         # self.PlotPics.setData(**getDataForPlotPics((300, 400., 600), (5, 6, 4.5)))
+        #  manual_polya_prior_plot
+        self.manualPolyaPriorPlot = MonGraph(vz.scene())
+        vz.addItem(self.manualPolyaPriorPlot)
+        self.set_data_computation()
 
         # actions
-        vz.enableAutoRange(axis="y")
-        vz.setAutoVisible(y=True)
         self.actionOpen.triggered.connect(openFile)
 
         def setAutoRangeY(val):
+            vz.setMouseEnabled(x=True, y=not val)
             if val:
                 vz.enableAutoRange(axis="y")
-            vz.setAutoVisible(y=val)
+                vz.setAutoVisible(y=val)
+            else:
+                vz.disableAutoRange(axis="y")
 
         self.actionAutoRangeY.triggered.connect(setAutoRangeY)
+
+        def setOpacityPlotReconstruction(val):
+            # colorPlotReconstruction = QColor(Qt.red)
+            # colorPlotReconstruction.setAlphaF(.01*val)
+            # self.PlotReconstruction.setPen(pg.mkPen(pg.mkColor(
+            #     colorPlotReconstruction), width=3,
+            #     style=Qt.SolidLine))
+            self.PlotReconstruction.setOpacity(.01*val)
+
+        self.sliderOpacityReconstruction.valueChanged.connect(
+            setOpacityPlotReconstruction)
         # print(vz.getPlotItem().getViewBox().getState())
         # self.start_compute_thread()
         # compute thread
@@ -464,6 +487,15 @@ class MainWindow(QMainWindow):
         self.state_computation = STOP
         self.actionStartPause.triggered.connect(self.StartPauseCompute)
         self.actionStop.triggered.connect(self.StopCompute)
+        # buttons
+
+        def setVisiblePriorPolya(val):
+            if val:
+                vz.addItem(self.manualPolyaPriorPlot)
+            else:
+                vz.removeItem(self.manualPolyaPriorPlot)
+
+        self.checkBoxVisibleManualPriorPolya.toggled.connect(setVisiblePriorPolya)
 
     def set_data_computation(self):
         xmin, xmax = self.zoom_widget.getViewBox().viewRange()[0]
@@ -474,10 +506,11 @@ class MainWindow(QMainWindow):
         tx, ty = self.bins_spectre[
             ext_test], self.spectre[test]
         self.bins_computation, self.data_computation = tx, ty
-        pos = [(tx[0], log10(ty[0])),  (tx[-1], log10(ty[-1]))]
-        print(pos)
-        self.manual_polya_prior_plot.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
-                                             pen=pg.mkPen(pg.mkColor(QColor(Qt.yellow)), width=1))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
+        level_y = log10(ty.mean()) if self.zoom_widget.getAxis('left').logMode \
+            else ty.mean()
+        pos = [(tx[0], level_y),  (tx[-1], level_y)]
+        self.manualPolyaPriorPlot.setData(pos=np.array(pos), brush=QColor(Qt.cyan),  # , text="du text"
+                                          pen=pg.mkPen(pg.mkColor(QColor(Qt.yellow)), width=1))  # , adj=adj, size=.2, symbol=symbols, pxMode=False, text=texts)
 
     def StopCompute(self):
         # -> STOP
@@ -504,8 +537,13 @@ class MainWindow(QMainWindow):
         nb_pics = len(p_energies)
         y0 = np.interp(
             p_energies, self.bins_computation[:-1], ref)
-        pos = hstack((array([p_energies, log10(p_intensities+y0)]),
-                      array([p_energies, log10(y0)]))).T
+
+        trans = (lambda x: log10(x)) if self.zoom_widget.getAxis('left').logMode \
+            else (lambda x: x)
+
+        pos = hstack((array([p_energies, trans(p_intensities+y0)]),
+                      array([p_energies, trans(y0)]))).T
+
         adj = c_[arange(nb_pics), arange(nb_pics)+nb_pics]
         symbols = np.repeat(["o", "o"], nb_pics).T
         size = np.repeat([6, 0], nb_pics).T
@@ -520,6 +558,8 @@ class MainWindow(QMainWindow):
         background = sumSpectrum*dataDico["fond"]
         self.PlotBackground.setData(
             self.bins_computation, background)
+        self.PlotReconstruction.setData(
+            self.bins_computation, sumSpectrum*dataDico["reconstruction"])
         self.PlotPics.setData(**self.getDataForPlotPics(dataDico["pics_energies"],
                                                         sumSpectrum *
                                                         dataDico["pics_weights"],
@@ -529,8 +569,11 @@ class MainWindow(QMainWindow):
     def GibbsSampler(self, progress_callback, paramGibbs):
         # -----------------------------------------
         # parameters
+        data = array(self.data_computation, dtype=np.int64)
+        numcans = len(data)
         offset_energy_canal = self.bins_computation[0]
-        coef_energy_canal = self.bins_computation[1]-self.bins_computation[0]
+        coef_energy_canal = (
+            self.bins_computation[-1]-self.bins_computation[0])/numcans
         print("kevcan", coef_energy_canal)
 
         offset_variance_energy = 0.063555
@@ -538,13 +581,12 @@ class MainWindow(QMainWindow):
 
         numthreads = self.threadpool.maxThreadCount()
         print("numthreads", numthreads)
-        data = array(self.data_computation, dtype=np.int64)
-        numcans = len(data)
-        n_per_call = 50
+        n_per_call = 10
         tab_energ_bins = .5 * \
             (self.bins_computation[:-1]+self.bins_computation[1:])
 
         compton = np.empty_like(data, dtype=pl.float64)
+        reconstruction = np.empty_like(data, dtype=pl.float64)
         # INITIALISATION
         MAX_NUMBER_OF_PICS = 1000
         pics_weights = zeros(MAX_NUMBER_OF_PICS, dtype=pl.float64)
@@ -577,24 +619,25 @@ class MainWindow(QMainWindow):
             print(f"Initialisation Computation: {id_pic} pics")
             return prop_pics_background, id_pic
 
-
-####### COMPUTATION LOOP #####################
+        ####### COMPUTATION LOOP #####################
         initialisation_request = True
         while True:
             ni = 0
             #### read param ####
             # background
-            h_polya = self.dialPolyaH.value()
-            m_polya = self.dialPolyaM.value()
+            h_polya = self.sliderPolyaH.value()
+            m_polya = self.sliderPolyaM.value()
             h_polya /= 15.
             m_polya = exp((m_polya-np.log2(numcans))*h_polya)
 
             x_polya_prior, y_polya_prior = array(
-                self.manual_polya_prior_plot.pos).T
+                self.manualPolyaPriorPlot.pos).T
 
-            alpha_dirichlet = 1.
+            alpha_dirichlet = 10**(.1*self.sliderAlphaDirichlet.value())
+            trans = (lambda x: 10**x) if self.zoom_widget.getAxis('left').logMode \
+                else (lambda x: x)
 
-            y_polya_prior = 10**array(y_polya_prior)  # log scale
+            y_polya_prior = trans(y_polya_prior)  # log scale
             ind_sort = np.argsort(x_polya_prior)
             prior_polya = np.interp(
                 tab_energ_bins, x_polya_prior[ind_sort], y_polya_prior[ind_sort])
@@ -608,31 +651,35 @@ class MainWindow(QMainWindow):
                 # print(pics_energies[:nb_pics])
                 # print(sqrt(pics_variances[:nb_pics])*2.35)
 
-# Computation for a half second
-            t0 = time.time()
-            while time.time()-t0 < .5:
-                if self.state_computation == STOP:
-                    break
-                ret = lib_sinbad5.iterations(
-                    n_per_call, data, nb_pics, proportionPicsFond,
-                    compton, pics_weights, pics_energies, pics_variances,
-                    m_polya, h_polya, prior_polya, 1.,
-                    offset_energy_canal, coef_energy_canal, offset_variance_energy, coef_variance_energy,
-                    alpha_dirichlet)
-                proportionPicsFond, nb_pics, nb_pics_aff = ret
-                nb_pics = np.int64(nb_pics)
-                nb_pics_aff = np.int64(nb_pics_aff)
-                # print("nb_pics",nb_pics)
-                # return "break 0"
-                while self.state_computation == PAUSE:
-                    time.sleep(.2)
+            # Computation for a half second
+            # t0 = time.time()
+            # while time.time()-t0 < .5:
+            #     if self.state_computation == STOP:
+            #         break
+            proportionPicsFond, nb_pics, nb_pics_aff = lib_sinbad5.iterations(
+                n_per_call, data, nb_pics, proportionPicsFond,
+                compton, pics_weights, pics_energies, pics_variances, reconstruction,
+                m_polya, h_polya, prior_polya, 1.,
+                offset_energy_canal, coef_energy_canal, offset_variance_energy, coef_variance_energy,
+                alpha_dirichlet)
 
-                ni += n_per_call
-            print('nb_pics', nb_pics,nb_pics_aff)
+            nb_pics = np.int64(nb_pics)
+            nb_pics_aff = np.int64(nb_pics_aff)
+            # print("nb_pics",nb_pics)
+            # return "break 0"
+            while self.state_computation == PAUSE:
+                time.sleep(.2)
+
+                # ni += n_per_call
+            print('nb_pics', nb_pics, nb_pics_aff)
             if self.state_computation == STOP:
                 break
-            progress_callback.emit(ni, dict(N=sum(data), fond=compton,
+            progress_callback.emit(ni, dict(N=sum(data),
+                                            fond=np.copy(compton),
+                                            reconstruction=np.copy(
+                                                reconstruction),
                                             pics_weights=pics_weights[:nb_pics_aff],
+                                            pics_variances=pics_variances[:nb_pics_aff],
                                             pics_energies=pics_energies[:nb_pics_aff]))
 
         return "Done."
